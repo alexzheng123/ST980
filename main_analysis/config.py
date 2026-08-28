@@ -97,7 +97,10 @@ def create_random_generators():
         "main_trials",
         "main_models",
         "prior_trials",
-        "prior_models"
+        "prior_models",
+        # Tuning trials and fits must not reuse the final 500-replication streams
+        "tuning_trials",
+        "tuning_models"
     ]
     seed_sequences = np.random.SeedSequence(RANDOM_SEED).spawn(len(stream_names))
     return {
