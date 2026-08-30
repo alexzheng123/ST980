@@ -19,32 +19,22 @@ PLACEBO_N = 201
 TREATMENT_PROBABILITY = SEMAGLUTIDE_N / TOTAL_N
 
 # Simulation settings
-SCENARIO_SCALES = {"constant_risk_difference": 0.0, "published_heterogeneity": 1.0}
-# Primary scenarios in the comparative simulation study
-# The published scenario supplies the multiple additive subgroup case
 PRIMARY_ANALYSIS_SCENARIOS = (
-    "constant_risk_difference",
-    "simple_age_subgroup",
-    "published_heterogeneity",
-    "age_bmi_interaction",
-    "continuous_heterogeneity"
+    "no_hte",
+    "joint_subgroup",
+    "published_scenario",
+    "continuous"
 )
 SCENARIO_LABELS = {
-    "constant_risk_difference": "Constant effect",
-    "simple_age_subgroup": "Age subgroup",
-    "published_heterogeneity": "Published additive",
-    "age_bmi_interaction": "Age and BMI interaction",
-    "continuous_heterogeneity": "Continuous"
+    "no_hte": "No HTE",
+    "joint_subgroup": "Joint subgroup",
+    "published_scenario": "Published scenario",
+    "continuous": "Continuous"
 }
 METHOD_LABELS = {
     "classical_interaction": "Classical interaction",
     "bayesian_hierarchical": "Bayesian hierarchical",
     "causal_forest": "Causal forest"
-}
-CUSTOM_SCENARIO_COEFFICIENTS = {
-    "simple_age_subgroup": -1.2,
-    "age_bmi_interaction": -1.3,
-    "continuous_heterogeneity": 0.75
 }
 CALIBRATION_N = 200_000
 MONTE_CARLO_REPLICATIONS = 500
@@ -54,14 +44,14 @@ PILOT_REPLICATIONS = 10
 PRIOR_SENSITIVITY_REPLICATIONS = 10
 EVALUATION_N = 1_000
 
-# Keep treated probabilities below one in the constant-risk-difference scenario
+# Keep treated probabilities below one in the no-HTE scenario
 # (treated probability = placebo probability + constant risk difference)
-PLACEBO_MAIN_EFFECT_SCALE = 0.6
+PLACEBO_SUBGROUP_EFFECT_SCALE = 0.6
 
 # Published full-arm targets
 TREATED_RESPONSE_TARGET = 862 / SEMAGLUTIDE_N
 PLACEBO_RESPONSE_TARGET = 63 / PLACEBO_N
-AVERAGE_CATE_TARGET = TREATED_RESPONSE_TARGET - PLACEBO_RESPONSE_TARGET
+ATE_TARGET = TREATED_RESPONSE_TARGET - PLACEBO_RESPONSE_TARGET
 
 # Pre-truncation parameters calibrated to match the target mean and SD
 AGE_GENERATING_MEAN = 46.831676
@@ -69,24 +59,8 @@ AGE_GENERATING_SD = 12.401212
 BMI_GENERATING_MEAN = 33.814772
 BMI_GENERATING_SD = 10.319237
 
-# Height assumptions to calculate bodyweight from BMI
-FEMALE_HEIGHT_MEAN = 1.64
-FEMALE_HEIGHT_SD = 0.0675
-MALE_HEIGHT_MEAN = 1.79
-MALE_HEIGHT_SD = 0.0775
-MINIMUM_HEIGHT = 1.40
-MAXIMUM_HEIGHT = 2.10
-
 # Columns available to an analyst
-BASELINE_COLUMNS = [
-    "age_years",
-    "female",
-    "bodyweight_kg",
-    "bmi",
-    "waist_circumference_cm",
-    "hba1c_pct",
-    "prediabetes"
-]
+BASELINE_COLUMNS = ["age_years", "female", "bmi", "prediabetes"]
 ANALYSIS_COLUMNS = ["participant_id", *BASELINE_COLUMNS, "treated", "weight_loss_5pct"]
 
 def create_random_generators():
@@ -108,47 +82,9 @@ def create_random_generators():
         for name, seed_sequence in zip(stream_names, seed_sequences)
     }
 
-def pooled_mean_sd(n_1, mean_1, sd_1, n_0, mean_0, sd_0):
-    """Combine two groups' means and sample standard deviations"""
-    # Weight each arm by its sample size
-    total = n_1 + n_0
-    mean = (n_1 * mean_1 + n_0 * mean_0) / total
-    # Combine variation within and between the two arms
-    sum_squares = (
-        (n_1 - 1) * sd_1**2
-        + (n_0 - 1) * sd_0**2
-        + n_1 * (mean_1 - mean) ** 2
-        + n_0 * (mean_0 - mean) ** 2
-    )
-    return mean, np.sqrt(sum_squares / (total - 1))
-
-# Pooled BMI and waist targets used by the baseline generator
-CONTINUOUS_TARGETS = pd.DataFrame.from_dict(
-    {
-        "bmi": pooled_mean_sd(SEMAGLUTIDE_N, 39.8, 7.0, PLACEBO_N, 39.7, 6.6),
-        "waist_circumference_cm": pooled_mean_sd(
-            SEMAGLUTIDE_N, 118.4, 15.8, PLACEBO_N, 118.6, 14.5
-        )
-    },
-    orient="index",
-    columns=["target_mean", "target_sd"]
-)
-
 # Glycaemic status was available for 1205 of the 1206 participants
 FEMALE_PROBABILITY = (753 + 147) / TOTAL_N
 PREDIABETES_PROBABILITY = (378 + 82) / 1205
-
-# Waist-generation assumptions chosen to match the pooled mean and SD
-# Higher BMI is associated with a larger waist circumference
-# Men have larger waists than women at the same BMI
-# total waist variance = BMI-related variance + sex-related variance + noise variance
-WAIST_BMI_SLOPE = 1.4
-WAIST_MALE_EFFECT = 6.0
-WAIST_NOISE_SD = np.sqrt(
-    CONTINUOUS_TARGETS.loc["waist_circumference_cm", "target_sd"] ** 2
-    - (WAIST_BMI_SLOPE * CONTINUOUS_TARGETS.loc["bmi", "target_sd"]) ** 2
-    - WAIST_MALE_EFFECT**2 * FEMALE_PROBABILITY * (1 - FEMALE_PROBABILITY)
-)
 
 # Published subgroup odds ratios from Supplementary Table 3
 SUBGROUP_OR_TARGETS = {
@@ -166,7 +102,7 @@ REFERENCE_LEVELS = {
     "glycaemic_status": "Normoglycaemia"
 }
 
-def make_model_term(factor, level, placebo_log_or):
+def make_model_term(factor, level, placebo_subgroup_log_or):
     """Compute the true interaction coefficients from the published odds ratios"""
     reference = REFERENCE_LEVELS[factor]
     interaction_log_or = np.log(
@@ -175,9 +111,8 @@ def make_model_term(factor, level, placebo_log_or):
     return {
         "factor": factor,
         "level": level,
-        # Shrink the placebo subgroup effects so the constant-risk-difference
-        # scenario cannot produce probabilities above one
-        "placebo_log_or": PLACEBO_MAIN_EFFECT_SCALE * placebo_log_or,
+        # Shrink placebo subgroup effects to keep no-HTE probabilities valid
+        "placebo_log_or": PLACEBO_SUBGROUP_EFFECT_SCALE * placebo_subgroup_log_or,
         "interaction_log_or": interaction_log_or
     }
 
@@ -187,27 +122,15 @@ def inverse_logit(values):
     values = np.clip(np.asarray(values, dtype=float), -35.0, 35.0)
     return 1.0 / (1.0 + np.exp(-values))
 
-def sample_truncated_normal(rng, mean, sd, lower, upper, size):
+def sample_truncated_normal(random_generator, mean, sd, lower, upper, size):
     """Draw normally distributed values inside fixed limits"""
-    values = rng.normal(mean, sd, size)
+    values = random_generator.normal(mean, sd, size)
     outside = (values < lower) | (values >= upper)
     # Redraw only values that fall outside the allowed range
     while outside.any():
-        values[outside] = rng.normal(mean, sd, outside.sum())
+        values[outside] = random_generator.normal(mean, sd, outside.sum())
         outside = (values < lower) | (values >= upper)
     return values
-
-def sample_height(rng, female):
-    """Generate plausible sex-specific heights in metres"""
-    means = np.where(female == 1, FEMALE_HEIGHT_MEAN, MALE_HEIGHT_MEAN)
-    sds = np.where(female == 1, FEMALE_HEIGHT_SD, MALE_HEIGHT_SD)
-    heights = rng.normal(means, sds)
-    outside = (heights < MINIMUM_HEIGHT) | (heights >= MAXIMUM_HEIGHT)
-    # Redraw only heights outside the plausible range
-    while outside.any():
-        heights[outside] = rng.normal(means[outside], sds[outside])
-        outside = (heights < MINIMUM_HEIGHT) | (heights >= MAXIMUM_HEIGHT)
-    return heights
 
 def add_subgroup_labels(data):
     """Derive subgroup labels from the analysis columns"""
@@ -240,28 +163,6 @@ def simulate_baseline(n, random_generator):
     bmi = sample_truncated_normal(
         random_generator, BMI_GENERATING_MEAN, BMI_GENERATING_SD, 30, np.inf, n
     )
-    # Derive bodyweight from BMI and a plausible unobserved height
-    height = sample_height(random_generator, female)
-    bodyweight = bmi * height**2
-
-    # Relate waist to BMI and sex while retaining unexplained variation
-    male = 1 - female
-    waist = (
-        CONTINUOUS_TARGETS.loc["waist_circumference_cm", "target_mean"]
-        + WAIST_BMI_SLOPE * (bmi - CONTINUOUS_TARGETS.loc["bmi", "target_mean"])
-        + WAIST_MALE_EFFECT * (male - (1 - FEMALE_PROBABILITY))
-        + random_generator.normal(0, WAIST_NOISE_SD, n)
-    )
-
-    # Generate HbA1c within the limits of each glycaemic category
-    hba1c = np.empty(n)
-    normoglycaemia = prediabetes == 0
-    hba1c[normoglycaemia] = sample_truncated_normal(
-        random_generator, 5.48, 0.20, 4.5, 5.7, normoglycaemia.sum()
-    )
-    hba1c[~normoglycaemia] = sample_truncated_normal(
-        random_generator, 5.98, 0.20, 5.7, 6.5, (~normoglycaemia).sum()
-    )
 
     # Create the baseline DataFrame
     baseline = pd.DataFrame(
@@ -269,10 +170,7 @@ def simulate_baseline(n, random_generator):
             "participant_id": np.arange(1, n + 1),
             "age_years": age,
             "female": female,
-            "bodyweight_kg": bodyweight,
             "bmi": bmi,
-            "waist_circumference_cm": waist,
-            "hba1c_pct": hba1c,
             "prediabetes": prediabetes
         }
     )
@@ -282,6 +180,15 @@ def simulate_baseline(n, random_generator):
 _calibration_data = simulate_baseline(
     CALIBRATION_N, create_random_generators()["calibration"]
 )
+
+# Fixed standardisation constants for the continuous-age scenario
+CALIBRATION_AGE_MEAN = _calibration_data["age_years"].mean()
+CALIBRATION_AGE_SD = _calibration_data["age_years"].std(ddof=0)
+
+# Strong prespecified synthetic joint-effect scenario
+JOINT_SUBGROUP_COEFFICIENT = 2.0
+# Prespecified synthetic decrease in effectiveness per age SD
+CONTINUOUS_AGE_COEFFICIENT = -0.5
 
 def estimated_placebo_total(factor, level):
     """Estimate the number of placebo participants in a subgroup"""
@@ -354,136 +261,94 @@ def calibrate_intercept(base_score, target_probability):
             upper = midpoint
     return (lower + upper) / 2
 
-# Calibrate the placebo and treatment models using the large fixed population
-
-# Calculate the placebo subgroup score
+# Calibrate the placebo model using the large fixed population
 _placebo_score = subgroup_score(_calibration_data, "placebo_log_or")
-
-# Calibrate the placebo intercept to match the published placebo response rate
 PLACEBO_INTERCEPT = calibrate_intercept(_placebo_score, PLACEBO_RESPONSE_TARGET)
 
-# Calculate the treatment-interaction score
-_interaction_score = subgroup_score(_calibration_data, "interaction_log_or")
+def joint_subgroup(data):
+    """Identify participants in the joint BMI and prediabetes subgroup"""
+    return (data["bmi"].ge(40) & data["prediabetes"].eq(1)).to_numpy()
 
-# Construct the treatment base score
-_published_treatment_base_score = (
-    PLACEBO_INTERCEPT + _placebo_score + _interaction_score
-)
+def standardised_age(data):
+    """Standardise age using the fixed calibration population"""
+    return (data["age_years"].to_numpy() - CALIBRATION_AGE_MEAN) / CALIBRATION_AGE_SD
 
-# Calibrate the common treatment effect to match the published semaglutide response rate
-PUBLISHED_TREATMENT_INTERCEPT = calibrate_intercept(
-    _published_treatment_base_score, TREATED_RESPONSE_TARGET
-)
-
-def custom_scenario_score(data, scenario):
-    """Calculate the selected scenario's treatment-effect modifier"""
-    if scenario == "simple_age_subgroup":
-        return data["age_years"].ge(65).astype(float).to_numpy()
-    if scenario == "age_bmi_interaction":
-        return (data["age_years"].ge(60) & data["bmi"].ge(40)).astype(float).to_numpy()
-    if scenario == "continuous_heterogeneity":
-        return 0.65 * np.tanh((data["bmi"].to_numpy() - 40) / 7) + 0.35 * np.tanh(
-            (data["age_years"].to_numpy() - 50) / 15
-        )
-    raise ValueError(f"Unknown custom scenario {scenario}")
-
-# Calculate the continuous modifier score in the calibration population
-_continuous_calibration_score = custom_scenario_score(
-    _calibration_data, "continuous_heterogeneity"
-)
-
-# Store the thresholds for the low- and high-modifier groups
-CONTINUOUS_MODIFIER_QUARTILES = tuple(
-    np.quantile(_continuous_calibration_score, [0.25, 0.75])
-)
-
-def subgroup_comparison(data, scenario):
-    """Define the prespecified subgroup comparison for each scenario"""
-    if scenario in {
-        "constant_risk_difference",
-        "simple_age_subgroup",
-        "published_heterogeneity"
-    }:
+def define_subgroups(data, scenario):
+    """Define the prespecified subgroup difference for each scenario"""
+    if scenario in {"no_hte", "published_scenario"}:
         group_one = data["age_years"].ge(65).to_numpy()
         label = "age 65 or older minus under 65"
-    elif scenario == "age_bmi_interaction":
-        group_one = (data["age_years"].ge(60) & data["bmi"].ge(40)).to_numpy()
-        label = "age 60 or older and BMI 40 or higher minus all others"
-    elif scenario == "continuous_heterogeneity":
-        score = custom_scenario_score(data, scenario)
-        lower, upper = CONTINUOUS_MODIFIER_QUARTILES
-        group_one = score >= upper
-        group_zero = score <= lower
-        return {
-            "label": "upper minus lower modifier quartile",
-            "group_one": group_one,
-            "group_zero": group_zero
-        }
+    elif scenario == "joint_subgroup":
+        group_one = joint_subgroup(data)
+        label = "BMI 40 or higher and prediabetes minus all others"
+    elif scenario == "continuous":
+        raise ValueError("Continuous subgroups use fixed evaluation age quartiles")
     else:
         raise ValueError(f"Unknown primary scenario {scenario}")
-
     return {"label": label, "group_one": group_one, "group_zero": ~group_one}
 
 # Calculate placebo log odds for every participant in the calibration population
 _calibration_placebo_log_odds = PLACEBO_INTERCEPT + _placebo_score
 
-# Calibrate a separate common treatment effect for each custom scenario
-# Keep the heterogeneity pattern fixed while matching the published
-# population-average semaglutide response
-CUSTOM_TREATMENT_INTERCEPTS = {}
+# Calibrate the joint-subgroup treatment intercept
+_joint_treatment_base_score = (
+    _calibration_placebo_log_odds
+    + JOINT_SUBGROUP_COEFFICIENT * joint_subgroup(_calibration_data)
+)
+JOINT_TREATMENT_INTERCEPT = calibrate_intercept(
+    _joint_treatment_base_score, TREATED_RESPONSE_TARGET
+)
 
-for _scenario, _coefficient in CUSTOM_SCENARIO_COEFFICIENTS.items():
-    # Construct treatment log odds before adding the common treatment effect
-    _custom_base_score = (
-        _calibration_placebo_log_odds
-        + _coefficient * custom_scenario_score(_calibration_data, _scenario)
-    )
-    # Find the common log-odds shift required to match the treatment target
-    CUSTOM_TREATMENT_INTERCEPTS[_scenario] = calibrate_intercept(
-        _custom_base_score, TREATED_RESPONSE_TARGET
-    )
+# Calibrate the published additive treatment intercept
+_interaction_score = subgroup_score(_calibration_data, "interaction_log_or")
+_published_treatment_base_score = (
+    PLACEBO_INTERCEPT + _placebo_score + _interaction_score
+)
+PUBLISHED_TREATMENT_INTERCEPT = calibrate_intercept(
+    _published_treatment_base_score, TREATED_RESPONSE_TARGET
+)
+
+# Calibrate the continuous-age treatment intercept
+_continuous_treatment_base_score = (
+    _calibration_placebo_log_odds
+    + CONTINUOUS_AGE_COEFFICIENT * standardised_age(_calibration_data)
+)
+CONTINUOUS_TREATMENT_INTERCEPT = calibrate_intercept(
+    _continuous_treatment_base_score, TREATED_RESPONSE_TARGET
+)
 
 def calculate_outcome_probabilities(data, scenario):
     """Calculate both potential outcome probabilities"""
-    known_scenarios = set(SCENARIO_SCALES) | set(CUSTOM_SCENARIO_COEFFICIENTS)
-    if scenario not in known_scenarios:
+    if scenario not in PRIMARY_ANALYSIS_SCENARIOS:
         raise ValueError(f"Unknown scenario {scenario}")
 
     # Calculate the placebo probability
     placebo_log_odds = PLACEBO_INTERCEPT + subgroup_score(data, "placebo_log_or")
     placebo_probability = inverse_logit(placebo_log_odds)
 
-    if scenario in CUSTOM_SCENARIO_COEFFICIENTS:
-        # Calculate treatment log-odds
+    if scenario == "no_hte":
+        treated_probability = placebo_probability + ATE_TARGET
+    elif scenario == "joint_subgroup":
         treatment_log_odds = (
             placebo_log_odds
-            + CUSTOM_TREATMENT_INTERCEPTS[scenario]
-            + CUSTOM_SCENARIO_COEFFICIENTS[scenario]
-            * custom_scenario_score(data, scenario)
+            + JOINT_TREATMENT_INTERCEPT
+            + JOINT_SUBGROUP_COEFFICIENT * joint_subgroup(data)
         )
-        # Calculate the treatment probability
         treated_probability = inverse_logit(treatment_log_odds)
-        return placebo_probability, treated_probability
-
-    # Use the published subgroup OR pattern to define the full scenario
-    published_treatment_log_odds = (
-        placebo_log_odds
-        + PUBLISHED_TREATMENT_INTERCEPT
-        + subgroup_score(data, "interaction_log_or")
-    )
-    published_treatment_probability = inverse_logit(published_treatment_log_odds)
-
-    # Shrink individual risk differences towards a common risk difference
-
-    # Calculate the published individual treatment effect (CATE)
-    published_cate = published_treatment_probability - placebo_probability
-
-    # Change the amount of heterogeneity in the treatment effect
-    scale = SCENARIO_SCALES[scenario]
-    scenario_cate = AVERAGE_CATE_TARGET + scale * (published_cate - AVERAGE_CATE_TARGET)
-
-    # Calculate the final treatment probability
-    treated_probability = placebo_probability + scenario_cate
+    elif scenario == "published_scenario":
+        treatment_log_odds = (
+            placebo_log_odds
+            + PUBLISHED_TREATMENT_INTERCEPT
+            + subgroup_score(data, "interaction_log_or")
+        )
+        treated_probability = inverse_logit(treatment_log_odds)
+    else:
+        treatment_log_odds = (
+            placebo_log_odds
+            + CONTINUOUS_TREATMENT_INTERCEPT
+            + CONTINUOUS_AGE_COEFFICIENT * standardised_age(data)
+        )
+        treated_probability = inverse_logit(treatment_log_odds)
 
     # Check that all probabilities are valid (between zero and one)
     if ((treated_probability < 0) | (treated_probability > 1)).any():
