@@ -5,7 +5,6 @@ import pandas as pd
 
 # This generator creates STEP UP-inspired fully synthetic data
 
-# Main analysis output directory
 CONFIG_DIRECTORY = Path(__file__).resolve().parent
 RESULTS_DIRECTORY = CONFIG_DIRECTORY / "results"
 
@@ -44,11 +43,11 @@ PILOT_REPLICATIONS = 10
 PRIOR_SENSITIVITY_REPLICATIONS = 10
 EVALUATION_N = 1_000
 
-# Keep treated probabilities below one in the no-HTE scenario
+# Keep treated probabilities below one in the No HTE scenario
 # (treated probability = placebo probability + constant risk difference)
 PLACEBO_SUBGROUP_EFFECT_SCALE = 0.6
 
-# Published full-arm targets
+# Published full arm targets
 TREATED_RESPONSE_TARGET = 862 / SEMAGLUTIDE_N
 PLACEBO_RESPONSE_TARGET = 63 / PLACEBO_N
 ATE_TARGET = TREATED_RESPONSE_TARGET - PLACEBO_RESPONSE_TARGET
@@ -111,7 +110,7 @@ def make_model_term(factor, level, placebo_subgroup_log_or):
     return {
         "factor": factor,
         "level": level,
-        # Shrink placebo subgroup effects to keep no-HTE probabilities valid
+        # Shrink placebo subgroup effects to keep No HTE probabilities valid
         "placebo_log_or": PLACEBO_SUBGROUP_EFFECT_SCALE * placebo_subgroup_log_or,
         "interaction_log_or": interaction_log_or
     }
@@ -134,7 +133,6 @@ def sample_truncated_normal(random_generator, mean, sd, lower, upper, size):
 
 def add_subgroup_labels(data):
     """Derive subgroup labels from the analysis columns"""
-    # Keep the original data unchanged
     labelled = data.copy()
     labelled["sex"] = np.where(labelled["female"] == 1, "Female", "Male")
     labelled["age_group"] = np.where(
@@ -164,7 +162,6 @@ def simulate_baseline(n, random_generator):
         random_generator, BMI_GENERATING_MEAN, BMI_GENERATING_SD, 30, np.inf, n
     )
 
-    # Create the baseline DataFrame
     baseline = pd.DataFrame(
         {
             "participant_id": np.arange(1, n + 1),
@@ -181,11 +178,11 @@ _calibration_data = simulate_baseline(
     CALIBRATION_N, create_random_generators()["calibration"]
 )
 
-# Fixed standardisation constants for the continuous-age scenario
+# Fixed standardisation constants for the continuous age scenario
 CALIBRATION_AGE_MEAN = _calibration_data["age_years"].mean()
 CALIBRATION_AGE_SD = _calibration_data["age_years"].std(ddof=0)
 
-# Strong prespecified synthetic joint-effect scenario
+# Strong prespecified synthetic joint effect scenario
 JOINT_SUBGROUP_COEFFICIENT = 2.0
 # Prespecified synthetic decrease in effectiveness per age SD
 CONTINUOUS_AGE_COEFFICIENT = -0.5
@@ -252,7 +249,6 @@ def calibrate_intercept(base_score, target_probability):
     """Find an intercept that gives the requested average probability"""
     lower = -10.0
     upper = 10.0
-    # Perform a binary search repeatedly
     for _ in range(80):
         midpoint = (lower + upper) / 2
         if inverse_logit(base_score + midpoint).mean() < target_probability:
@@ -287,10 +283,9 @@ def define_subgroups(data, scenario):
         raise ValueError(f"Unknown primary scenario {scenario}")
     return {"label": label, "group_one": group_one, "group_zero": ~group_one}
 
-# Calculate placebo log odds for every participant in the calibration population
 _calibration_placebo_log_odds = PLACEBO_INTERCEPT + _placebo_score
 
-# Calibrate the joint-subgroup treatment intercept
+# Calibrate the joint subgroup treatment intercept
 _joint_treatment_base_score = (
     _calibration_placebo_log_odds
     + JOINT_SUBGROUP_COEFFICIENT * joint_subgroup(_calibration_data)
@@ -308,7 +303,7 @@ PUBLISHED_TREATMENT_INTERCEPT = calibrate_intercept(
     _published_treatment_base_score, TREATED_RESPONSE_TARGET
 )
 
-# Calibrate the continuous-age treatment intercept
+# Calibrate the continuous age treatment intercept
 _continuous_treatment_base_score = (
     _calibration_placebo_log_odds
     + CONTINUOUS_AGE_COEFFICIENT * standardised_age(_calibration_data)
@@ -322,7 +317,6 @@ def calculate_outcome_probabilities(data, scenario):
     if scenario not in PRIMARY_ANALYSIS_SCENARIOS:
         raise ValueError(f"Unknown scenario {scenario}")
 
-    # Calculate the placebo probability
     placebo_log_odds = PLACEBO_INTERCEPT + subgroup_score(data, "placebo_log_or")
     placebo_probability = inverse_logit(placebo_log_odds)
 
@@ -359,7 +353,6 @@ def simulate_trial(baseline, random_generator, scenario):
     """Randomise treatment and outcomes using the supplied random generator"""
     data = baseline.copy()
 
-    # Calculate the number assigned to treatment
     treated_n = round(TREATMENT_PROBABILITY * len(data))
     # Randomly assign treatment to the requested number of participants
     treated = np.r_[
@@ -367,7 +360,6 @@ def simulate_trial(baseline, random_generator, scenario):
     ]
     random_generator.shuffle(treated)
 
-    # Calculate both potential outcome probabilities
     placebo_probability, treated_probability = calculate_outcome_probabilities(
         data, scenario
     )
@@ -377,7 +369,6 @@ def simulate_trial(baseline, random_generator, scenario):
         treated == 1, treated_probability, placebo_probability
     )
 
-    # Generate the observed binary outcome
     data["treated"] = treated
     data["weight_loss_5pct"] = random_generator.binomial(1, observed_probability)
 
