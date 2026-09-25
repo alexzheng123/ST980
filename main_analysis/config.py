@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# This generator creates STEP UP-inspired fully synthetic data
+# Generate fully synthetic trial data informed by published STEP UP summary statistics
 
 CONFIG_DIRECTORY = Path(__file__).resolve().parent
 RESULTS_DIRECTORY = CONFIG_DIRECTORY / "results"
@@ -31,14 +31,14 @@ SCENARIO_LABELS = {
     "continuous": "Continuous"
 }
 METHOD_LABELS = {
-    "classical_interaction": "Classical interaction",
+    "classical_interaction": "Classical logistic regression",
     "bayesian_hierarchical": "Bayesian hierarchical",
     "causal_forest": "Causal forest"
 }
 CALIBRATION_N = 200_000
 MONTE_CARLO_REPLICATIONS = 500
 
-# Small settings for checking the complete analysis workflow
+# Pilot, sensitivity, and evaluation settings
 PILOT_REPLICATIONS = 10
 PRIOR_SENSITIVITY_REPLICATIONS = 10
 EVALUATION_N = 1_000
@@ -47,7 +47,7 @@ EVALUATION_N = 1_000
 # (treated probability = placebo probability + constant risk difference)
 PLACEBO_SUBGROUP_EFFECT_SCALE = 0.6
 
-# Published full arm targets
+# STEP UP-derived response calibration targets
 TREATED_RESPONSE_TARGET = 862 / SEMAGLUTIDE_N
 PLACEBO_RESPONSE_TARGET = 63 / PLACEBO_N
 ATE_TARGET = TREATED_RESPONSE_TARGET - PLACEBO_RESPONSE_TARGET
@@ -182,9 +182,9 @@ _calibration_data = simulate_baseline(
 CALIBRATION_AGE_MEAN = _calibration_data["age_years"].mean()
 CALIBRATION_AGE_SD = _calibration_data["age_years"].std(ddof=0)
 
-# Strong prespecified synthetic joint effect scenario
+# Prespecified joint-subgroup treatment-effect modifier
 JOINT_SUBGROUP_COEFFICIENT = 2.0
-# Prespecified synthetic decrease in effectiveness per age SD
+# Prespecified continuous-age treatment-effect modifier per age SD
 CONTINUOUS_AGE_COEFFICIENT = -0.5
 
 def estimated_placebo_total(factor, level):
@@ -294,7 +294,7 @@ JOINT_TREATMENT_INTERCEPT = calibrate_intercept(
     _joint_treatment_base_score, TREATED_RESPONSE_TARGET
 )
 
-# Calibrate the published additive treatment intercept
+# Calibrate the published-scenario treatment intercept
 _interaction_score = subgroup_score(_calibration_data, "interaction_log_or")
 _published_treatment_base_score = (
     PLACEBO_INTERCEPT + _placebo_score + _interaction_score
@@ -350,7 +350,7 @@ def calculate_outcome_probabilities(data, scenario):
     return placebo_probability, treated_probability
 
 def simulate_trial(baseline, random_generator, scenario):
-    """Randomise treatment and outcomes using the supplied random generator"""
+    """Randomise treatment and generate outcomes using the supplied random generator"""
     data = baseline.copy()
 
     treated_n = round(TREATMENT_PROBABILITY * len(data))
